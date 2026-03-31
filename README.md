@@ -8,6 +8,8 @@ NOTE! Setup Anaconda path to run python directly from segment_tiles.groove.
 
 Segmentation: Use nondummy_segmentation.py to run a DeepCell model on the exported TIFFs.
 
+Annotation export: export_data_for_cellsighter.groovy allows for exporting data from QuPath in CellSighter-digestable format 
+
 Fine-tuning: A dedicated script is provided for model refinement on custom data.
 
 Installation
@@ -22,6 +24,8 @@ Install the required dependencies for DeepCell:
 bash
 pip install -r requirements.txt
 Use code with caution.
+
+
 
 Usage
 1. Exporting Tiles and segmenting (QuPath)
