@@ -1,5 +1,6 @@
 # NORC_rudn
-A pipeline for histology image processing using Qupath and Python
+A pipeline for histology image processing using Qupath and Python.
+
 This repository provides an end-to-end workflow for segmenting tissue regions using DeepCell and QuPath.
 It includes scripts for tiling annotated regions, running deep learning-based segmentation, and importing results back into QuPath for downstream analysis.
 Workflow Overview
