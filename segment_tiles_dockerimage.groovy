@@ -375,8 +375,8 @@ txtFiles.each { file ->
         def poly = ROIs.createPolygonROI(xs, ys, plane)
 
         // Create as DETECTION object so it becomes a proper child object under the annotation
-        def cellObj = PathObjects.createDetectionObject(poly)
-        cellObj.setType("Cell")
+        def cellObj = PathObjects.createCellObject(poly, poly)
+        
 
         childObjectsToAdd << cellObj
     }
