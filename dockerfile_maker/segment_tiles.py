@@ -1,409 +1,306 @@
-import qupath.lib.regions.RegionRequest
-import qupath.lib.objects.PathObjects
-import qupath.lib.roi.ROIs
-import qupath.lib.regions.ImagePlane
-import qupath.lib.images.servers.TransformedServerBuilder
+# -*- coding: utf-8 -*-
+"""
+Run DeepCell NuclearSegmentation on QuPath-exported tiles and save polygons
+for each tile as a .txt file with the same basename.
 
-// ==========================
-// Settings
-// ==========================
-def imageData = getCurrentImageData()
-def server = imageData.getServer()
-def plane = ImagePlane.getDefaultPlane()
-def hierarchy = imageData.getHierarchy()
+Each output .txt contains one polygon per line:
+x1,y1;x2,y2;x3,y3;...
 
-def selected = getSelectedObject()
-if (selected == null || selected.getROI() == null) {
-    print "❌ No ROI selected!"
-    return
-}
+Coordinates are LOCAL to the tile.
+QuPath will shift them back using x/y from the filename.
+"""
 
-def roi = selected.getROI()
+from pathlib import Path
+import argparse
+import os
+import sys
 
-int roiX = (int)Math.floor(roi.getBoundsX())
-int roiY = (int)Math.floor(roi.getBoundsY())
-int roiW = (int)Math.ceil(roi.getBoundsWidth())
-int roiH = (int)Math.ceil(roi.getBoundsHeight())
+import numpy as np
+import tifffile as tiff
 
-int imgW = server.getWidth()
-int imgH = server.getHeight()
+from deepcell.applications import NuclearSegmentation
+from skimage.measure import find_contours
 
-print "ROI bounds: x=${roiX}, y=${roiY}, w=${roiW}, h=${roiH}"
 
-// folders
-def tileDir = buildFilePath(PROJECT_BASE_DIR, "tiles_roi")
-mkdirs(tileDir)
+def getenv_str(name: str, default: str) -> str:
+    value = os.getenv(name)
+    return value if value is not None and value != "" else default
 
-// tile params
-int tileSize = 512
-int overlap = 64
-int step = tileSize - overlap
-double downsample = 1.0d
 
-if (step <= 0) {
-    print "❌ overlap must be smaller than tileSize"
-    return
-}
+def getenv_float(name: str, default: float) -> float:
+    value = os.getenv(name)
+    if value is None or value == "":
+        return default
+    return float(value)
 
-// ==========================
-// Docker / model settings
-// ==========================
-// Build the image beforehand:
-// docker build -t qupath-deepcell-seg:latest .
 
-String dockerExe = "docker"
-String dockerImage = "qupath-deepcell-seg:latest"
+def getenv_int(name: str, default: int) -> int:
+    value = os.getenv(name)
+    if value is None or value == "":
+        return default
+    return int(value)
 
-// Host folder containing the weights file
-String weightsHostDir = "C:/Users/julia/OneDrive/Desktop/melanoma"
 
-// Weight file name inside that folder
-String weightsFileName = "nuclear_finetuned_best.weights.h5"
+# =========================
+# DEFAULTS
+# =========================
+DEFAULT_TILE_DIR = getenv_str("TILE_DIR", "/data")
+DEFAULT_WEIGHTS_PATH = getenv_str("WEIGHTS_PATH", "/model/model.weights.h5")
+DEFAULT_IMAGE_MPP = getenv_float("IMAGE_MPP", 0.65)
 
-// DeepCell inference settings
-String imageMpp = "0.65"
-String maximaThreshold = "0.05"
-String interiorThreshold = "0.3"
-String minObjectArea = "40"
-String minPolygonPoints = "6"
-String simplifyEveryNth = "2"
+DEFAULT_MAXIMA_THRESHOLD = getenv_float("MAXIMA_THRESHOLD", 0.05)
+DEFAULT_INTERIOR_THRESHOLD = getenv_float("INTERIOR_THRESHOLD", 0.3)
 
-// ==========================
-// Find DAPI channel only
-// ==========================
-def metadata = server.getMetadata()
-def channels = metadata.getChannels()
+DEFAULT_MIN_OBJECT_AREA = getenv_int("MIN_OBJECT_AREA", 40)
+DEFAULT_MIN_POLYGON_POINTS = getenv_int("MIN_POLYGON_POINTS", 6)
+DEFAULT_SIMPLIFY_EVERY_NTH = getenv_int("SIMPLIFY_EVERY_NTH", 2)
 
-int dapiIndex = -1
-for (int i = 0; i < channels.size(); i++) {
-    def nm = channels.get(i).getName()
-    if (nm != null && nm.toLowerCase().contains("dapi")) {
-        dapiIndex = i
-        break
-    }
-}
 
-if (dapiIndex < 0) {
-    dapiIndex = 0
-    print "⚠️ DAPI channel not found by name, using channel 0: ${channels.get(dapiIndex).getName()}"
-} else {
-    print "✅ Using DAPI channel index ${dapiIndex}: ${channels.get(dapiIndex).getName()}"
-}
+# =========================
+# IMAGE LOADING
+# =========================
+def load_nuclear_image(path: Path) -> np.ndarray:
+    """
+    Load image for NuclearSegmentation and return float32 array of shape (H, W, 1),
+    normalized to [0, 1].
 
-def exportServer = new TransformedServerBuilder(server)
-        .extractChannels(dapiIndex)
-        .build()
+    Accepted:
+    - 2D grayscale: (H, W)
+    - 3D channels-last: (H, W, C)
+    - 3D channels-first: (C, H, W)
 
-// cleanup
-def tileFolderFile = new File(tileDir)
-if (tileFolderFile.exists()) {
-    tileFolderFile.eachFile { f ->
-        def name = f.name.toLowerCase()
-        if (name.endsWith(".txt") || name.endsWith(".tif")) {
-            f.delete()
-        }
-    }
-}
+    For multichannel images, takes channel 0 by default.
+    """
+    im = tiff.imread(str(path))
+    if im is None:
+        raise FileNotFoundError(f"Cannot read: {path}")
 
-def tileFiles = []
-def tileInfo = [:]
+    im = np.asarray(im)
+    im = np.squeeze(im)
 
-// ==========================
-// Helper: tile starts
-// ==========================
-def makeStarts = { int minCoord, int roiSize, int fullSize, int stepSize, int imageLimit ->
-    def starts = []
+    if im.ndim == 2:
+        nuc = im
 
-    int start0 = Math.max(0, minCoord)
-    int endExclusive = Math.min(imageLimit, minCoord + roiSize)
-
-    if (roiSize <= 0 || endExclusive <= start0) {
-        return starts
-    }
-
-    int s = start0
-    while (s < endExclusive) {
-        starts << s
-        s += stepSize
-    }
-
-    int lastStart = Math.max(start0, endExclusive - fullSize)
-    lastStart = Math.min(lastStart, Math.max(0, imageLimit - fullSize))
-
-    if (!starts.contains(lastStart)) {
-        starts << lastStart
-    }
-
-    starts = starts.unique().sort()
-    return starts
-}
-
-def xStarts = makeStarts(roiX, roiW, tileSize, step, imgW)
-def yStarts = makeStarts(roiY, roiH, tileSize, step, imgH)
-
-if (xStarts.isEmpty() || yStarts.isEmpty()) {
-    print "❌ Could not generate tiles for ROI"
-    return
-}
-
-print "Tile grid: ${xStarts.size()} x ${yStarts.size()}"
-
-// ==========================
-// Export tiles
-// ==========================
-for (int iy = 0; iy < yStarts.size(); iy++) {
-    int y = yStarts[iy] as int
-
-    for (int ix = 0; ix < xStarts.size(); ix++) {
-        int x = xStarts[ix] as int
-
-        int w = Math.min(tileSize, imgW - x)
-        int h = Math.min(tileSize, imgH - y)
-
-        if (w <= 0 || h <= 0)
-            continue
-
-        if (!roi.intersects(x as double, y as double, w as double, h as double)) {
-            continue
-        }
-
-        def request = RegionRequest.createInstance(
-            exportServer.getPath(),
-            downsample,
-            x, y, w, h
+    elif im.ndim == 3:
+        if im.shape[0] in (1, 2, 3, 4) and im.shape[0] < im.shape[-1]:
+            nuc = im[0]
+        elif im.shape[-1] in (1, 2, 3, 4):
+            nuc = im[..., 0]
+        else:
+            raise ValueError(
+                f"Unsupported 3D image shape {im.shape}. "
+                "Expected (H, W, C) or (C, H, W) with small C."
+            )
+    else:
+        raise ValueError(
+            f"Unsupported image ndim={im.ndim}, shape={im.shape}"
         )
 
-        def filename = buildFilePath(tileDir, String.format("tile_x%d_y%d_w%d_h%d.tif", x, y, w, h))
-        writeImageRegion(exportServer, request, filename)
-        tileFiles << filename
+    nuc = nuc.astype(np.float32)
+    nuc -= nuc.min()
+    max_val = nuc.max()
+    if max_val > 0:
+        nuc /= max_val
 
-        tileInfo["${x}_${y}"] = [
-            x  : x,
-            y  : y,
-            w  : w,
-            h  : h,
-            ix : ix,
-            iy : iy,
-            nX : xStarts.size(),
-            nY : yStarts.size()
-        ]
-    }
-}
+    nuc = nuc[..., np.newaxis]  # (H, W, 1)
+    return nuc
 
-print "✅ ROI tiling complete! Saved ${tileFiles.size()} tiles."
 
-if (tileFiles.isEmpty()) {
-    print "❌ No tiles exported."
-    return
-}
+# =========================
+# MASK -> POLYGONS
+# =========================
+def mask_to_polygons(
+    label_mask: np.ndarray,
+    min_area: int,
+    min_points: int,
+    simplify_every_nth: int,
+):
+    """
+    Convert integer label mask into a list of polygons.
+    Each polygon is a list of (x, y) points in tile-local coordinates.
+    """
+    polygons = []
 
-// ==========================
-// Call Docker container
-// ==========================
-def tileDirAbs = new File(tileDir).getAbsolutePath()
-def weightsHostDirAbs = new File(weightsHostDir).getAbsolutePath()
+    label_mask = np.asarray(label_mask)
+    if label_mask.ndim != 2:
+        raise ValueError(f"label_mask must be 2D, got shape {label_mask.shape}")
 
-def weightsHostDirFile = new File(weightsHostDirAbs)
-if (!weightsHostDirFile.exists() || !weightsHostDirFile.isDirectory()) {
-    print "❌ Weights folder not found: ${weightsHostDirAbs}"
-    return
-}
+    ids = np.unique(label_mask)
+    ids = ids[ids > 0]
 
-def expectedWeights = new File(weightsHostDirFile, weightsFileName)
-if (!expectedWeights.exists()) {
-    print "❌ Weights file not found: ${expectedWeights.getAbsolutePath()}"
-    return
-}
+    for obj_id in ids:
+        obj = (label_mask == obj_id)
+        if int(obj.sum()) < min_area:
+            continue
 
-List<String> cmd = [
-    dockerExe,
-    "run",
-    "--rm",
-    "-v",
-    tileDirAbs + ":/data",
-    "-v",
-    weightsHostDirAbs + ":/model:ro",
-    "-e",
-    "TILE_DIR=/data",
-    "-e",
-    "WEIGHTS_PATH=/model/" + weightsFileName,
-    "-e",
-    "IMAGE_MPP=" + imageMpp,
-    "-e",
-    "MAXIMA_THRESHOLD=" + maximaThreshold,
-    "-e",
-    "INTERIOR_THRESHOLD=" + interiorThreshold,
-    "-e",
-    "MIN_OBJECT_AREA=" + minObjectArea,
-    "-e",
-    "MIN_POLYGON_POINTS=" + minPolygonPoints,
-    "-e",
-    "SIMPLIFY_EVERY_NTH=" + simplifyEveryNth,
-    dockerImage
-].collect { it.toString() }
+        contours = find_contours(obj.astype(np.uint8), level=0.5)
+        if not contours:
+            continue
 
-println "Running command: " + cmd
+        contour = max(contours, key=len)
 
-def pb = new ProcessBuilder(cmd)
-pb.redirectErrorStream(true)
-def proc = pb.start()
+        if simplify_every_nth > 1:
+            contour = contour[::simplify_every_nth]
 
-proc.inputStream.eachLine { line ->
-    println "[DOCKER] ${line}"
-}
+        if len(contour) < min_points:
+            continue
 
-int exitCode = proc.waitFor()
-println "Docker exit code: ${exitCode}"
+        poly = []
+        for y, x in contour:
+            poly.append((float(x), float(y)))
 
-if (exitCode != 0) {
-    print "❌ Docker container failed with exit code ${exitCode}"
-    return
-}
+        if len(poly) >= min_points:
+            polygons.append(poly)
 
-print "✅ Container segmentation complete!"
+    return polygons
 
-// ==========================
-// Read back polygons
-// ==========================
-def txtFiles = tileFolderFile.listFiles()?.findAll {
-    it.name.toLowerCase().endsWith(".txt")
-}
 
-if (txtFiles == null || txtFiles.isEmpty()) {
-    print "❌ No annotation txt files found in ${tileDir}"
-    return
-}
+def polygon_to_line(poly):
+    return ";".join(f"{x:.1f},{y:.1f}" for x, y in poly)
 
-def childObjectsToAdd = []
 
-txtFiles.each { file ->
+def parse_args():
+    parser = argparse.ArgumentParser(description="DeepCell segmentation on QuPath tiles")
 
-    def matcher = (file.name =~ /tile_x(\d+)_y(\d+)(?:_w(\d+)_h(\d+))?\.txt/)
-    if (!matcher.matches()) {
-        print "⚠️ Skipping file with unexpected name: ${file.name}"
-        return
-    }
+    parser.add_argument(
+        "--tile-dir",
+        default=DEFAULT_TILE_DIR,
+        help="Folder containing tile_x*_y*.tif files"
+    )
+    parser.add_argument(
+        "--weights",
+        default=DEFAULT_WEIGHTS_PATH,
+        help="Path to .h5 or .weights.h5 model weights"
+    )
+    parser.add_argument(
+        "--image-mpp",
+        type=float,
+        default=DEFAULT_IMAGE_MPP,
+        help="Microns per pixel for DeepCell prediction"
+    )
+    parser.add_argument(
+        "--maxima-threshold",
+        type=float,
+        default=DEFAULT_MAXIMA_THRESHOLD,
+        help="DeepCell postprocess maxima_threshold"
+    )
+    parser.add_argument(
+        "--interior-threshold",
+        type=float,
+        default=DEFAULT_INTERIOR_THRESHOLD,
+        help="DeepCell postprocess interior_threshold"
+    )
+    parser.add_argument(
+        "--min-object-area",
+        type=int,
+        default=DEFAULT_MIN_OBJECT_AREA,
+        help="Minimum object area in pixels"
+    )
+    parser.add_argument(
+        "--min-polygon-points",
+        type=int,
+        default=DEFAULT_MIN_POLYGON_POINTS,
+        help="Minimum contour points to keep polygon"
+    )
+    parser.add_argument(
+        "--simplify-every-nth",
+        type=int,
+        default=DEFAULT_SIMPLIFY_EVERY_NTH,
+        help="Keep every nth contour point"
+    )
 
-    int tileX = matcher[0][1] as int
-    int tileY = matcher[0][2] as int
+    return parser.parse_args()
 
-    def info = tileInfo["${tileX}_${tileY}"]
-    if (info == null) {
-        print "⚠️ Missing tile info for ${file.name}"
-        return
-    }
 
-    int ix = info.ix as int
-    int iy = info.iy as int
-    int w = info.w as int
-    int h = info.h as int
+def main():
+    args = parse_args()
 
-    double leftTrim = 0.0d
-    double rightTrim = 0.0d
-    double topTrim = 0.0d
-    double bottomTrim = 0.0d
+    tile_dir = Path(args.tile_dir)
+    weights_path = Path(args.weights)
 
-    if (ix > 0) {
-        int prevX = xStarts[ix - 1] as int
-        int overlapLeft = (prevX + tileSize) - tileX
-        leftTrim = Math.max(0.0d, ((double)overlapLeft) / 2.0d)
-    }
+    if not tile_dir.exists():
+        raise FileNotFoundError(f"Tile folder not found: {tile_dir}")
 
-    if (ix < xStarts.size() - 1) {
-        int nextX = xStarts[ix + 1] as int
-        int overlapRight = (tileX + w) - nextX
-        rightTrim = Math.max(0.0d, ((double)overlapRight) / 2.0d)
-    }
+    if not weights_path.exists():
+        raise FileNotFoundError(f"Weights file not found: {weights_path}")
 
-    if (iy > 0) {
-        int prevY = yStarts[iy - 1] as int
-        int overlapTop = (prevY + tileSize) - tileY
-        topTrim = Math.max(0.0d, ((double)overlapTop) / 2.0d)
-    }
+    tif_files = sorted(tile_dir.glob("tile_x*_y*.tif"))
+    if not tif_files:
+        print(f"No tile tif files found in {tile_dir}")
+        return 0
 
-    if (iy < yStarts.size() - 1) {
-        int nextY = yStarts[iy + 1] as int
-        int overlapBottom = (tileY + h) - nextY
-        bottomTrim = Math.max(0.0d, ((double)overlapBottom) / 2.0d)
+    print(f"Found {len(tif_files)} tiles")
+    print("Loading DeepCell NuclearSegmentation...")
+
+    app = NuclearSegmentation()
+    app.model.load_weights(str(weights_path))
+
+    print(f"Weights loaded: {weights_path}")
+    print(f"Model training resolution (model_mpp): {app.model_mpp}")
+    print(f"Prediction image_mpp: {args.image_mpp}")
+
+    postprocess_kwargs = {
+        "maxima_threshold": args.maxima_threshold,
+        "interior_threshold": args.interior_threshold,
     }
 
-    double keepMinX = leftTrim
-    double keepMaxX = ((double)w) - rightTrim
-    double keepMinY = topTrim
-    double keepMaxY = ((double)h) - bottomTrim
+    error_count = 0
 
-    file.eachLine { line ->
-        line = line.trim()
-        if (!line)
-            return
+    for i, tif_path in enumerate(tif_files, start=1):
+        print(f"[{i}/{len(tif_files)}] Processing {tif_path.name}")
 
-        def pts = []
-        def pairs = line.split(";")
+        out_txt = tif_path.with_suffix(".txt")
 
-        pairs.each { pair ->
-            def xy = pair.trim().split(",")
-            if (xy.size() != 2)
-                return
+        try:
+            data = load_nuclear_image(tif_path)      # (H, W, 1)
+            X = np.expand_dims(data, axis=0)         # (1, H, W, 1)
 
-            double localX = xy[0] as double
-            double localY = xy[1] as double
-            double globalX = tileX + localX
-            double globalY = tileY + localY
+            seg = app.predict(
+                X,
+                image_mpp=args.image_mpp,
+                postprocess_kwargs=postprocess_kwargs
+            )
 
-            pts << [localX, localY, globalX, globalY]
-        }
+            seg = np.asarray(seg)
 
-        if (pts.size() < 3)
-            return
+            if seg.ndim == 4:
+                seg2d = seg[0, :, :, 0]
+            elif seg.ndim == 3:
+                seg2d = seg[0]
+            else:
+                raise ValueError(f"Unexpected prediction shape: {seg.shape}")
 
-        double cxLocal = (pts.collect { it[0] as double }.sum() as double) / (double)pts.size()
-        double cyLocal = (pts.collect { it[1] as double }.sum() as double) / (double)pts.size()
-        double cxGlobal = (pts.collect { it[2] as double }.sum() as double) / (double)pts.size()
-        double cyGlobal = (pts.collect { it[3] as double }.sum() as double) / (double)pts.size()
+            seg2d = seg2d.astype(np.int32)
 
-        if (cxLocal < keepMinX || cxLocal >= keepMaxX || cyLocal < keepMinY || cyLocal >= keepMaxY) {
-            return
-        }
+            polygons = mask_to_polygons(
+                seg2d,
+                min_area=args.min_object_area,
+                min_points=args.min_polygon_points,
+                simplify_every_nth=args.simplify_every_nth,
+            )
 
-        if (!roi.contains(cxGlobal, cyGlobal)) {
-            return
-        }
+            if polygons:
+                out_txt.write_text(
+                    "\n".join(polygon_to_line(poly) for poly in polygons),
+                    encoding="utf-8"
+                )
+            else:
+                out_txt.write_text("", encoding="utf-8")
 
-        double[] xs = pts.collect { it[2] as double } as double[]
-        double[] ys = pts.collect { it[3] as double } as double[]
+            print(f"    objects: {len(polygons)} -> {out_txt.name}")
 
-        def poly = ROIs.createPolygonROI(xs, ys, plane)
+        except Exception as e:
+            error_count += 1
+            print(f"    ERROR in {tif_path.name}: {e}")
+            out_txt.write_text("", encoding="utf-8")
 
-        // Create as DETECTION object so it becomes a proper child object under the annotation
-        def cellObj = PathObjects.createCellObject(poly, poly)
-        
+    print(f"Done. Tiles with errors: {error_count}")
+    return 0 if error_count == 0 else 1
 
-        childObjectsToAdd << cellObj
-    }
-}
 
-// ==========================
-// Add as CHILD objects under selected ROI
-// ==========================
-if (!childObjectsToAdd.isEmpty()) {
-
-    // Optional: remove previous child detections under the selected ROI
-    /*
-    def oldChildren = selected.getChildObjects() == null ? [] : new ArrayList(selected.getChildObjects())
-    if (!oldChildren.isEmpty()) {
-        hierarchy.removeObjects(oldChildren, true)
-        print "🗑️ Removed ${oldChildren.size()} old child objects from selected ROI."
-    }
-    */
-
-    // Explicitly add below the selected parent annotation
-    childObjectsToAdd.each { obj ->
-        hierarchy.addObjectBelowParent(selected, obj, false)
-    }
-
-    hierarchy.fireHierarchyChangedEvent(this, selected)
-
-    print "✅ Added ${childObjectsToAdd.size()} child objects under the selected parent ROI."
-} else {
-    print "⚠️ No valid polygons were loaded."
-}
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except Exception as e:
+        print(f"FATAL ERROR: {e}")
+        sys.exit(2)
