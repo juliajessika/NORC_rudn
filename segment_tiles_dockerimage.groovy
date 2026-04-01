@@ -374,8 +374,9 @@ txtFiles.each { file ->
 
         def poly = ROIs.createPolygonROI(xs, ys, plane)
 
-        def cellObj = PathObjects.createAnnotationObject(poly)
-        cellObj.setName("Cell")
+        // Create as DETECTION object so it becomes a proper child object under the annotation
+        def cellObj = PathObjects.createDetectionObject(poly)
+        cellObj.setType("Cell")
 
         childObjectsToAdd << cellObj
     }
@@ -386,6 +387,7 @@ txtFiles.each { file ->
 // ==========================
 if (!childObjectsToAdd.isEmpty()) {
 
+    // Optional: remove previous child detections under the selected ROI
     /*
     def oldChildren = selected.getChildObjects() == null ? [] : new ArrayList(selected.getChildObjects())
     if (!oldChildren.isEmpty()) {
@@ -394,10 +396,14 @@ if (!childObjectsToAdd.isEmpty()) {
     }
     */
 
-    selected.addChildObjects(childObjectsToAdd)
-    hierarchy.fireHierarchyChangedEvent(this)
+    // Explicitly add below the selected parent annotation
+    childObjectsToAdd.each { obj ->
+        hierarchy.addObjectBelowParent(selected, obj, false)
+    }
 
-    print "✅ Added ${childObjectsToAdd.size()} child cell annotations under the selected parent ROI."
+    hierarchy.fireHierarchyChangedEvent(this, selected)
+
+    print "✅ Added ${childObjectsToAdd.size()} child objects under the selected parent ROI."
 } else {
     print "⚠️ No valid polygons were loaded."
 }
