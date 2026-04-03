@@ -54,6 +54,7 @@ DEFAULT_INTERIOR_THRESHOLD = getenv_float("INTERIOR_THRESHOLD", 0.3)
 DEFAULT_MIN_OBJECT_AREA = getenv_int("MIN_OBJECT_AREA", 40)
 DEFAULT_MIN_POLYGON_POINTS = getenv_int("MIN_POLYGON_POINTS", 6)
 DEFAULT_SIMPLIFY_EVERY_NTH = getenv_int("SIMPLIFY_EVERY_NTH", 2)
+DEFAULT_PIXEL_EXPANSION = getenv_int("PIXEL_EXPANSION", 0)
 
 
 # =========================
@@ -208,6 +209,12 @@ def parse_args():
         default=DEFAULT_SIMPLIFY_EVERY_NTH,
         help="Keep every nth contour point"
     )
+    parser.add_argument(
+    "--pixel-expansion",
+    type=int,
+    default=DEFAULT_PIXEL_EXPANSION,
+    help="DeepCell postprocess pixel_expansion"
+    )
 
     return parser.parse_args()
 
@@ -242,6 +249,7 @@ def main():
     postprocess_kwargs = {
         "maxima_threshold": args.maxima_threshold,
         "interior_threshold": args.interior_threshold,
+        "pixel_expansion": args.pixel_expansion,
     }
 
     error_count = 0
