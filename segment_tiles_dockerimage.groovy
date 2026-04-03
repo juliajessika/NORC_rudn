@@ -62,11 +62,12 @@ String weightsFileName = "nuclear_finetuned_best.weights.h5"
 
 // DeepCell inference settings
 String imageMpp = "0.65"
-String maximaThreshold = "0.05"
-String interiorThreshold = "0.3"
+String maximaThreshold = "0.01"
+String interiorThreshold = "0.2"
 String minObjectArea = "40"
 String minPolygonPoints = "6"
 String simplifyEveryNth = "2"
+double pixelExpansion = 2.0d
 
 // ==========================
 // Find DAPI channel only
@@ -239,7 +240,10 @@ List<String> cmd = [
     "MIN_POLYGON_POINTS=" + minPolygonPoints,
     "-e",
     "SIMPLIFY_EVERY_NTH=" + simplifyEveryNth,
-    dockerImage
+    "-e",
+    "PIXEL_EXPANSION=" + pixelExpansion,
+    dockerImage,
+    
 ].collect { it.toString() }
 
 println "Running command: " + cmd
@@ -373,9 +377,10 @@ txtFiles.each { file ->
         double[] ys = pts.collect { it[3] as double } as double[]
 
         def poly = ROIs.createPolygonROI(xs, ys, plane)
+        def expandedPoly = RoiTools.buffer(poly, pixelExpansion)
 
         // Create as DETECTION object so it becomes a proper child object under the annotation
-        def cellObj = PathObjects.createCellObject(poly, poly)
+        def cellObj = PathObjects.createCellObject(expandedPoly, expandedPoly)
         
 
         childObjectsToAdd << cellObj
