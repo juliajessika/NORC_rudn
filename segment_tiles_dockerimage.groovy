@@ -61,13 +61,13 @@ String weightsHostDir = "C:/Users/julia/OneDrive/Desktop/melanoma"
 String weightsFileName = "nuclear_finetuned_best.weights.h5"
 
 // DeepCell inference settings
-String imageMpp = "0.65"
+String imageMpp = "0.75"
 String maximaThreshold = "0.01"
-String interiorThreshold = "0.2"
+String interiorThreshold = "0.25"
 String minObjectArea = "40"
 String minPolygonPoints = "6"
 String simplifyEveryNth = "2"
-double pixelExpansion = 2.0d
+int pixelExpansion = 0
 
 // ==========================
 // Find DAPI channel only
