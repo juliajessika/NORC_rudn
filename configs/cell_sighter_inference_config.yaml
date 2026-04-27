@@ -1,0 +1,62 @@
+export:
+  downsample: 1.0
+  export_root_name: "cellsighter_export_inference1"
+
+  raw_ext: ".tiff"
+  mask_ext: ".tiff"
+
+  selected_annotations_only: false
+  skip_unclassified_cells: false
+  simplify_class_names: true
+  min_cell_area_px: 0.0
+  use_recursive_children: true
+  prepend_background_label_in_txt: true
+  skip_empty_annotations: true
+
+  image_id_prefix: "FOV"
+
+  mask_raw_outside_annotation: false
+  export_native_raw: true
+
+training_config:
+  crop_input_size: 60
+  crop_size: 128
+  epoch_max: 50
+  learning_rate: 0.001
+  to_pad: true
+  sample_batch: true
+  aug: false
+
+  # Use null to omit from config.json
+  size_data: null
+
+  batch_size: 32
+  num_workers: 0
+
+  blacklist: []
+
+hierarchy:
+  write_hierarchy_match: true
+  write_hierarchy_match_from_classes: true
+
+cellsighter:
+  run_evaluation: true
+
+  eval_py: "C:/Users/julia/CellSighter/eval.py"
+  conda_exe: "C:/Users/julia/anaconda3/Scripts/conda.exe"
+  conda_env_name: "cellsighter"
+
+  trained_model_path: "C:/Users/julia/OneDrive/Desktop/RUDN/TileServer/SampleProject/cellsighter_export/weights_49_count.pth"
+  trained_class_map_csv: "C:/Users/julia/OneDrive/Desktop/RUDN/TileServer/SampleProject/cellsighter_export/class_map.csv"
+
+  # Used only if run_evaluation: false.
+  # If null, script expects val_results.csv inside export_root.
+  results_csv: null
+
+labels:
+  write_all_minus_one_labels_for_eval: true
+
+import_predictions:
+  write_predicted_path_class: true
+  write_prediction_measurements: true
+  prefix_imported_class_names: false
