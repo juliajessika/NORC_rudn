@@ -1,0 +1,41 @@
+paths:
+  tile_dir: "tiles_roi"
+  masks_dir: "masks"
+
+tiling:
+  tile_size: 512
+  overlap: 128
+  downsample: 1.0
+
+export:
+  # true = экспорт RGB через текущий QuPath rendering/display
+  # приоритетнее, чем mode
+  as_rgb: false
+
+  # rgb | channels | single_channel
+  mode: "channels"
+
+  # Для mode: channels
+  # Можно указывать индексы или имена каналов
+  channels:
+    - 0
+    - 1
+    # - "DAPI"
+    # - "FITC"
+
+  # Для mode: single_channel
+  # Можно указать индекс или имя
+  single_channel: 1
+
+cellpose:
+  conda_exe: "C:/Users/prikhodko_at/AppData/Local/anaconda3/Scripts/conda.exe"
+  conda_env: "cellpose"
+  python_script: "cellpose_segmentation.py"
+
+  # auto:
+  #   RGB -> "0,1,2"
+  #   selected channels -> "0,1,..."
+  #   single channel -> "0"
+  channels_to_use: "auto"
+
+  extra_args: []
