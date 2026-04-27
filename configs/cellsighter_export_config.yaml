@@ -1,0 +1,41 @@
+export:
+  downsample: 1.0
+  export_root_name: "cellsighter_export"
+
+  raw_ext: ".tiff"
+  mask_ext: ".tiff"
+
+  selected_annotations_only: false
+  skip_unclassified_cells: true
+  simplify_class_names: true
+  min_cell_area_px: 0.0
+  use_recursive_children: true
+  prepend_background_label_in_txt: true
+  skip_empty_annotations: true
+
+  image_id_prefix: "FOV"
+
+split:
+  val_fraction: 0.5
+  seed: 12345
+
+training_config:
+  crop_input_size: 60
+  crop_size: 128
+  epoch_max: 50
+  learning_rate: 0.001
+  to_pad: false
+  sample_batch: true
+  aug: true
+
+  # Use null to omit from config.json
+  size_data: null
+
+  batch_size: 32
+  num_workers: 0
+
+  blacklist: []
+
+hierarchy:
+  write_hierarchy_match: true
+  write_hierarchy_match_from_classes: true
