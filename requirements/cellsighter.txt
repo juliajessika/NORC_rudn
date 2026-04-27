@@ -1,6 +1,4 @@
-from pathlib import Path
-
-requirements = """absl-py==2.0.0
+absl-py==2.0.0
 aiobotocore==2.3.4
 aiohappyeyeballs==2.4.3
 aiohttp==3.10.10
@@ -137,8 +135,4 @@ yt-dlp==2025.3.26
 zarr==2.18.2
 zict==3.0.0
 zipp==3.17.0
-"""
 
-path = Path("/mnt/data/requirements_cellsighter.txt")
-path.write_text(requirements, encoding="utf-8")
-path.as_posix()
