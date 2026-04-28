@@ -287,7 +287,7 @@ def projectPath = { def value ->
 // Load config
 // ============================================================
 
-def configFile = new File(buildFilePath(PROJECT_BASE_DIR, "cellpose_qupath_config.yaml"))
+def configFile = new File(buildFilePath(PROJECT_BASE_DIR, "config.yaml"))
 
 if (!configFile.exists()) {
     println "❌ YAML config not found: ${configFile.getAbsolutePath()}"
@@ -676,7 +676,7 @@ if (tileFiles.isEmpty()) {
 // Call Python Cellpose
 // ============================================================
 
-def pythonScript = projectPath(getCfg(cfg, ["cellpose", "python_script"], "cellpose_segmentation.py"))
+def pythonScript = projectPath(getCfg(cfg, ["cellpose", "python_script"], "cellpose_segmentation-normalisation.py"))
 def condaExe = getCfg(cfg, ["cellpose", "conda_exe"], "").toString()
 def condaEnv = getCfg(cfg, ["cellpose", "conda_env"], "cellpose").toString()
 def tileDirAbs = new File(tileDir).getAbsolutePath()
