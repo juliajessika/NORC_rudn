@@ -1,5 +1,7 @@
-/* QuPath-Script for exporting square annotations with cell DETECTIONS
-   Маски сохраняются с ТОЧНО ТАКОЙ ЖЕ калибровкой, как и исходные изображения
+/* QuPath-Script for exporting square annotations (images and masks) with cell DETECTIONS
+Exporting RGB, multichannel and single-channel ROIs
+
+Need to add a case if annotations instead of cell detections (create cell detections without cytoplasm)
 */
 
 import qupath.lib.regions.RegionRequest
@@ -8,6 +10,7 @@ import qupath.lib.common.GeneralTools
 import ij.ImagePlus
 import ij.process.ShortProcessor
 import ij.IJ
+import ij.process.ImageProcessor
 
 import java.awt.Color
 import java.awt.Graphics2D
@@ -28,7 +31,7 @@ String maskSuffix = "_masks"
 
 boolean exportSelectedAnnotationsOnly = false
 boolean skipUnclassifiedCells = false
-Integer channelOfInterest = 3
+Integer channelOfInterest = null  // null - все каналы, 1,2,3... - конкретный канал
 
 // =====================================
 // HELPERS
@@ -76,6 +79,52 @@ def getChannelNames = { server ->
     return out
 }
 
+// Функция для извлечения одного канала из BufferedImage
+def extractSingleChannel(BufferedImage img, int channelNumber, int totalChannels) {
+    if (totalChannels <= 1) {
+        println "  Изображение одноканальное, возвращаем как есть"
+        return img
+    }
+    
+    if (channelNumber > totalChannels) {
+        println "  ВНИМАНИЕ: Канал ${channelNumber} не существует (всего ${totalChannels} каналов)"
+        println "  Возвращаем все каналы"
+        return img
+    }
+    
+    try {
+        // Конвертируем BufferedImage в ImagePlus
+        def imp = new ImagePlus("Temp", img)
+        def processor = imp.getProcessor()
+        
+        // Создаем новый ImagePlus для одного канала
+        def channelImp = new ImagePlus("Channel", processor)
+        
+        // Извлекаем нужный канал (для RGB: 0=R,1=G,2=B)
+        int channelIndex = channelNumber - 1
+        if (channelIndex >= 0 && channelIndex < totalChannels) {
+            // Для RGB изображений
+            if (totalChannels == 3 && img.getType() == BufferedImage.TYPE_INT_RGB) {
+                def channelProcessor = new ij.process.ColorProcessor(img)
+                def channelImage = channelProcessor.getChannel(channelIndex + 1)
+                return channelImage.getBufferedImage()
+            } else {
+                // Для других мультиканальных изображений
+                def channels = ij.plugin.ChannelSplitter.split(imp)
+                if (channelNumber <= channels.length) {
+                    def result = channels[channelNumber - 1].getBufferedImage()
+                    channels.each { if (it != null) it.close() }
+                    return result
+                }
+            }
+        }
+        imp.close()
+    } catch (Exception e) {
+        println "  Ошибка при извлечении канала: ${e.getMessage()}"
+    }
+    return img
+}
+
 // =====================================
 // INITIAL SETUP
 // =====================================
@@ -89,6 +138,21 @@ double pixelWidth = cal.getPixelWidth()
 double pixelHeight = cal.getPixelHeight()
 String pixelUnit = cal.getPixelWidthUnit()
 println "Original calibration: ${pixelWidth} x ${pixelHeight} ${pixelUnit}/pixel"
+
+// Получаем количество каналов
+int nChannels = server.nChannels()
+println "Total channels in image: ${nChannels}"
+
+if (channelOfInterest != null) {
+    println "Channel of interest: ${channelOfInterest}"
+    if (channelOfInterest > nChannels) {
+        println "WARNING: Channel ${channelOfInterest} does not exist! Will export all channels."
+    } else if (nChannels == 1) {
+        println "NOTE: Image is single-channel, channel_of_interest setting will be ignored"
+    }
+} else {
+    println "Exporting ALL channels"
+}
 
 if (getProject() == null) {
     print "ERROR: Please open a QuPath project first."
@@ -186,16 +250,43 @@ squareAnnotations.eachWithIndex { square, idx ->
     int outH = img.getHeight()
     println "Exported size: ${outW} x ${outH}"
     
+    // ========== ОБРАБОТКА КАНАЛОВ ==========
+    BufferedImage imgToSave = img
+    
+    // Определяем, нужно ли извлекать один канал
+    boolean extractChannel = (channelOfInterest != null && 
+                              nChannels > 1 && 
+                              channelOfInterest <= nChannels)
+    
+    if (extractChannel) {
+        println "  Extracting channel ${channelOfInterest}..."
+        imgToSave = extractSingleChannel(img, channelOfInterest, nChannels)
+        println "  Channel extracted, new size: ${imgToSave.getWidth()} x ${imgToSave.getHeight()}"
+    } else if (channelOfInterest != null && nChannels == 1) {
+        println "  Image is single-channel, saving as is"
+    } else if (channelOfInterest != null && channelOfInterest > nChannels) {
+        println "  Channel ${channelOfInterest} not available, saving all channels"
+    } else {
+        println "  Saving all channels"
+    }
+    
     // Сохраняем изображение
     try {
-        writeImageRegion(server, request, imagePath)
+        // Для TIFF используем IJ.save (сохраняет калибровку)
+        def impToSave = new ImagePlus(imageFileName, imgToSave)
+        def calToSave = impToSave.getCalibration()
+        calToSave.setUnit(pixelUnit)
+        calToSave.pixelWidth = pixelWidth
+        calToSave.pixelHeight = pixelHeight
+        IJ.save(impToSave, imagePath)
+        impToSave.close()
         println "  Image saved: ${imageFileName}"
     } catch (Exception e) {
         println "ERROR: failed to write image: ${e.getMessage()}"
         return
     }
     
-    // ========== СОЗДАНИЕ МАСКИ ==========
+    // ========== СОЗДАНИЕ МАСКИ (НЕ ЗАВИСИТ ОТ КАНАЛОВ) ==========
     short[] pixels = new short[outW * outH]
     
     double scaleX = outW / (double)w
@@ -251,10 +342,9 @@ squareAnnotations.eachWithIndex { square, idx ->
     ImagePlus maskImp = new ImagePlus("Mask", sp)
     
     def maskCal = maskImp.getCalibration()
-    // Правильные методы для вашей версии ImageJ
-    maskCal.setUnit(pixelUnit)        // µm
-    maskCal.pixelWidth = pixelWidth   // 0.247521
-    maskCal.pixelHeight = pixelHeight // 0.247521
+    maskCal.setUnit(pixelUnit)
+    maskCal.pixelWidth = pixelWidth
+    maskCal.pixelHeight = pixelHeight
     
     IJ.save(maskImp, maskPath)
     maskImp.close()
