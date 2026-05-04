@@ -287,7 +287,7 @@ def projectPath = { def value ->
 // Load config
 // ============================================================
 
-def configFile = new File(buildFilePath(PROJECT_BASE_DIR, "config.yaml"))
+def configFile = new File(buildFilePath(PROJECT_BASE_DIR, "cellpose_segmentation.yaml"))
 
 if (!configFile.exists()) {
     println "❌ YAML config not found: ${configFile.getAbsolutePath()}"
