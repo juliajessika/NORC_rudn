@@ -1,0 +1,69 @@
+paths:
+  tile_dir: "tiles_roi"
+  masks_dir: "masks"
+
+tiling:
+  tile_size: 512
+  overlap: 128
+  downsample: 1.0
+
+export:
+  # true = export RGB via current QuPath rendering/display
+  # has priority over mode
+  as_rgb: false
+
+  # rgb | channels | single_channel
+  mode: "rgb"
+
+  # Used when mode: channels
+  # You can specify indices or channel names
+  channels:
+    - "DAPI"
+    - "AF700"
+
+  # Used when mode: single_channel
+  # index or channel name
+  single_channel: 1
+
+qupath:
+  # annotations | detections | cells
+  object_type: "cells"
+
+cellpose:
+  # --- Groovy launcher settings ---
+  conda_exe: "your path to conda.exe"
+  conda_env: "cellpose"
+  python_script: "cellpose_segmentation-normalisation.py"
+
+  # Channels passed from Groovy to Python (post-export channel indexing)
+  # auto:
+  #   RGB -> "0,1,2"
+  #   selected channels -> "0,1,..."
+  #   single channel -> "0"
+  channels_to_use: "auto"
+
+  # Optional extra CLI args for Python script
+  extra_args: []
+
+  # --- Python segmentation settings ---
+  # Use either model_type OR pretrained_model
+  model_type: "cyto3"
+  pretrained_model: "your path to a pretrained model"  # set to null to use model_type
+
+  diameter: 30
+  flow_threshold: 0.8
+  cellprob_threshold: 0.0
+  tile_norm_blocksize: 0
+  batch_size: 32
+
+  # auto | explicit
+  channels_mode: "auto"
+
+  # Used only if channels_mode: explicit
+  # Cellpose format: [nuclear_channel, cytoplasm_channel]
+  explicit_channels: [0, 0]
+
+postprocess:
+  min_object_area: 40
+  min_polygon_points: 6
+  simplify_every_nth: 2
