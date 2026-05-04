@@ -355,7 +355,7 @@ def optionalString = { def value ->
 // Load YAML config
 // ============================================================
 
-def configFile = new File(buildFilePath(PROJECT_BASE_DIR, "cell_sighter_inference_config.yaml"))
+def configFile = new File(buildFilePath(PROJECT_BASE_DIR, "cellsighter_inference.yaml"))
 
 if (!configFile.exists()) {
     println "ERROR: YAML config not found:"
