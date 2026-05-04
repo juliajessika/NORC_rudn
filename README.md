@@ -1,45 +1,274 @@
 # NORC_rudn
-A pipeline for histology image processing using Qupath and Python.
 
-This repository provides an end-to-end workflow for segmenting tissue regions using DeepCell and QuPath.
-It includes scripts for tiling annotated regions, running deep learning-based segmentation, and importing results back into QuPath for downstream analysis.
+QuPath + Python workflow for histology image analysis.
 
+This repository contains scripts for exporting image tiles from QuPath, segmenting cells/nuclei with Cellpose, importing segmentation polygons back into QuPath, and preparing data for CellSighter-style classification workflows.
 
-Workflow Overview
+## Repository layout
 
-Tile Export: Run segment_tiles.groovy in QuPath to generate TIFF patches from selected annotations. It automatically calls for nondummy_segmentation.py to process the images
-NOTE! Setup Anaconda path to run python directly from segment_tiles.groove.
+```text
+NORC_rudn/
+  cellpose_segmentation/
+    python/
+      cellpose_segmentation_normalisation.py
+    qupath/
+      segment_tiles_with_python.groovy
 
-Segmentation: Use nondummy_segmentation.py to run a DeepCell model on the exported TIFFs.
+  cellsighter_classification/
+    cellsighter_export_data_for_train.groovy
+    cellsighter_inference.groovy
 
-Annotation export: export_data_for_cellsighter.groovy allows for exporting data from QuPath in CellSighter-digestable format 
+  configs/
+    cellpose_segmentation.example.yaml
+    cellsighter_export.example.yaml
+    cellsighter_inference.example.yaml
 
-Fine-tuning: A dedicated script is provided for model refinement on custom data.
+  requirements/
+    cellpose.txt
+    cellsighter.txt
+    deepcell.txt
+    dev.txt
 
-Installation
-QuPath Setup
-Tested on QuPath v0.6
-Place the scripts from scripts/qupath/ into your QuPath project's scripts directory.
+  utilities/
+  README.md
+```
 
-NOTE! You have to use Projects instead of images to ensure everyhting runs smoothly. 
+## Requirements
 
-Python Setup
-Install the required dependencies for DeepCell:
-bash
-pip install -r requirements.txt
-Use code with caution.
+Recommended versions:
 
+* QuPath `0.6.x`
+* Python `3.10` or `3.11`
+* Conda or Mamba
+* Cellpose environment for segmentation
 
+Create a Cellpose environment:
 
-Usage
-1. Exporting Tiles and segmenting (QuPath)
-Open your project in QuPath, select an annotation, edit segment_tiles.groovy to point to your Anaconda and required venv and run segment_tiles.groovy. This will save TIFF tiles to a designated output folder.
+```bash
+conda create -n norc-cellpose python=3.10 -y
+conda activate norc-cellpose
+pip install -r requirements/cellpose.txt
+```
 
-4. Fine-Tuning
-To retrain or fine-tune the model with your own labeled data:
-bash
-python scripts/deepcell/train_model.py --data_path ./training_data
-Use code with caution.
+Minimal `requirements/cellpose.txt`:
 
-License
-This project is licensed under the MIT License. (TO ADD...) 
+```text
+cellpose
+numpy
+tifffile
+scikit-image
+opencv-python-headless
+pyyaml
+```
+
+## Configuration files
+
+Example configuration files are stored in `configs/`.
+
+Before running a workflow, copy the relevant example config into your QuPath project directory and edit the paths for your local machine.
+
+For Cellpose segmentation:
+
+```bash
+cp configs/cellpose_segmentation.example.yaml /path/to/qupath/project/cellpose_segmentation.yaml
+```
+
+For CellSighter training-data export:
+
+```bash
+cp configs/cellsighter_export.example.yaml /path/to/qupath/project/cellsighter_export.yaml
+```
+
+For CellSighter inference:
+
+```bash
+cp configs/cellsighter_inference.example.yaml /path/to/qupath/project/cellsighter_inference.yaml
+```
+
+The QuPath scripts expect these config names inside the QuPath project directory:
+
+```text
+cellpose_segmentation.yaml
+cellsighter_export.yaml
+cellsighter_inference.yaml
+```
+
+## Workflow 1: Cellpose segmentation from QuPath tiles
+
+### 1. Prepare the config
+
+Copy the example config:
+
+```bash
+cp configs/cellpose_segmentation.example.yaml /path/to/qupath/project/cellpose_segmentation.yaml
+```
+
+Edit the copied config. At minimum, check:
+
+```yaml
+paths:
+  conda_executable: /path/to/conda
+  conda_env_name: norc-cellpose
+  python_script: /path/to/NORC_rudn/cellpose_segmentation/python/cellpose_segmentation_normalisation.py
+  tile_dir: /path/to/output/tiles
+
+cellpose:
+  model_type: nuclei
+  channels_to_use: [0]
+  diameter: null
+  flow_threshold: 0.4
+  cellprob_threshold: 0.0
+```
+
+### 2. Open the image in QuPath
+
+Open your QuPath project and select the image you want to process.
+
+Create or select the annotation region that should be tiled and segmented.
+
+### 3. Run the QuPath segmentation script
+
+In QuPath, open the script editor and run:
+
+```text
+cellpose_segmentation/qupath/segment_tiles_with_python.groovy
+```
+
+The script will:
+
+1. Read `cellpose_segmentation.yaml` from the QuPath project directory.
+2. Export image tiles from the selected annotation.
+3. Call the Python Cellpose script on the exported tiles.
+4. Read polygon `.txt` files generated by Python.
+5. Import detected objects back into QuPath.
+
+### 4. Check the output
+
+After the script finishes, inspect the imported detections in QuPath.
+
+Check the tile output directory for:
+
+```text
+*.tif       exported image tiles
+*.txt       segmentation polygons for each tile
+*.log       optional logs or error summaries
+```
+
+## Workflow 2: Export training data for CellSighter
+
+### 1. Prepare the config
+
+```bash
+cp configs/cellsighter_export.example.yaml /path/to/qupath/project/cellsighter_export.yaml
+```
+
+Edit paths and class names in the copied config.
+
+### 2. Run the QuPath export script
+
+In QuPath, run:
+
+```text
+cellsighter_classification/cellsighter_export_data_for_train.groovy
+```
+
+The export script prepares training data, metadata tables, class maps, and split files for downstream classification.
+
+## Workflow 3: Run CellSighter inference
+
+### 1. Prepare the config
+
+```bash
+cp configs/cellsighter_inference.example.yaml /path/to/qupath/project/cellsighter_inference.yaml
+```
+
+Edit the model path, input/output paths, and class settings.
+
+### 2. Run the inference script
+
+In QuPath, run:
+
+```text
+cellsighter_classification/cellsighter_inference.groovy
+```
+
+The script applies trained classification results and imports or updates object classes in QuPath.
+
+## File naming conventions
+
+Use importable Python names and editor-recognized script extensions.
+
+Recommended names:
+
+```text
+cellpose_segmentation/python/cellpose_segmentation_normalisation.py
+cellpose_segmentation/qupath/segment_tiles_with_python.groovy
+configs/cellpose_segmentation.example.yaml
+configs/cellsighter_export.example.yaml
+configs/cellsighter_inference.example.yaml
+```
+
+Avoid names such as:
+
+```text
+cellpose_segmentation-normalisation.py
+segment_tiles_with_python
+config.yaml
+cell_sighter_export_config.yaml
+cell_sighter_inference_config.yaml
+```
+
+## Troubleshooting
+
+### QuPath cannot find the config
+
+Check that the config file is inside the QuPath project directory and has the exact expected name:
+
+```text
+cellpose_segmentation.yaml
+cellsighter_export.yaml
+cellsighter_inference.yaml
+```
+
+### Python script is not found
+
+Check the `paths.python_script` field in the config. It should point to the absolute path of the Python segmentation script.
+
+### Cellpose environment is not found
+
+Check:
+
+```bash
+conda env list
+```
+
+Then update the config field:
+
+```yaml
+paths:
+  conda_env_name: norc-cellpose
+```
+
+### Segmentation returns no cells
+
+Check:
+
+* the exported `.tif` tiles are not empty;
+* the selected channel index is correct;
+* the Cellpose model type is appropriate;
+* `diameter`, `flow_threshold`, and `cellprob_threshold` are suitable for the image;
+* failed tiles are reported in logs rather than silently treated as empty detections.
+
+## Development notes
+
+Recommended future improvements:
+
+* replace positional Python arguments with `argparse`;
+* split large Groovy scripts into smaller helpers;
+* add a tiny test image and unit tests for polygon export;
+* keep separate requirement files for Cellpose, CellSighter, DeepCell, and development tools;
+* avoid silently converting failed segmentation tiles into empty output files.
+
+## License
+
+Add the project license here.
